@@ -75,7 +75,7 @@ class ImportScripts::YafSqlite < ImportScripts::Base
           id: row['UserID'],
           email: row['Email'],
           name: row['RealName'],
-          username: row['Name'],
+          username: row['Name'].gsub('@', ' at '), # transform email address usernames
           created_at: row['Joined'],
           last_seen_at: row['LastVisit'],
           registration_ip_address: row['IP'],
@@ -243,16 +243,60 @@ class ImportScripts::YafSqlite < ImportScripts::Base
     return "" if raw.blank?
     text = raw.dup
 
+    # quote
     text.gsub!(/\[(quote|quote=.*?)\]/, "\n[\\1]\n") # ensure newline before/after open quote
     text.gsub!(/(\[\/quote\])/, "\n\\1\n") # ensure newline before/after end quote
-    text.gsub!(/\[quote=([^\]]+?);\d*\]/, '[quote=\1]') # TODO convert to post/topic reference instead of stripping
+    text.gsub!(/\[quote=([^\]]+?);(\d*)\]/) { |_|
+      author = Regexp.last_match[1]
+      message_id = Regexp.last_match[2]
+      post_id = post_id_from_imported_post_id(message_id)
+      post = Post.find(post_id)
+      "[quote=\"#{author}, post:#{post.post_number}, topic:#{post.topic_id}\"]"
+    }
 
-    text.gsub!(/\[(b|i|u|s)\]\n+/, '[\1]') # strip newlines after opening single-line tags
-    text.gsub!(/\n+\[\/(b|i|u|s)\]/, '[/\1]') # strip newlines before closing single-line tags
+    # strip newlines before/after single-line tags
+    text.gsub!(/\[(b|i|u|s)\]\n+/, '[\1]')
+    text.gsub!(/\n+\[\/(b|i|u|s)\]/, '[/\1]')
 
+    # img
     text.gsub!(/\[img\](.+?)\[\/img\]/, '[img=\1] [/img]')
     text.gsub!('[img][/img]', '') # remove empty img tags
     text.gsub!('][/img]', '] [/img]') # ensure non-empty alt-text/title
+
+    # smileys
+    text.gsub!('[angry]', ':angry:')
+    text.gsub!('[biggrin]', ':grin:')
+    text.gsub!('[blink]', ':hushed:')
+    text.gsub!('[blush]', ':blush:')
+    text.gsub!('[bored]', ':zzz:')
+    text.gsub!('[confused]', ':confused:')
+    text.gsub!('[cool]', ':sunglasses:')
+    text.gsub!('[crying]', ':cry:')
+    text.gsub!('[cursing]', ':face_with_symbols_over_mouth:')
+    text.gsub!('[drool]', ':drooling_face:')
+    text.gsub!('[flapper]', ':stuck_out_tongue_closed_eyes:')
+    text.gsub!('[glare]', ':unamused:')
+    text.gsub!('[huh]', ':confused:')
+    text.gsub!('[laugh]', ':rofl:')
+    text.gsub!('[lol]', ':joy:')
+    text.gsub!('[love]', ':heart_eyes:')
+    text.gsub!('[mad]', ':angry:')
+    text.gsub!('[mellow]', ':slightly_frowning_face:')
+    text.gsub!('[omg]', ':scream:')
+    text.gsub!('[rolleyes]', ':roll_eyes:')
+    text.gsub!('[sad]', ':frowning_face:')
+    text.gsub!('[scared]', ':fearful:')
+    text.gsub!('[sleep]', ':sleeping:')
+    text.gsub!('[smile]', ':smile:')
+    text.gsub!('[sneaky]', ':face_with_raised_eyebrow:')
+    text.gsub!('[thumbdn]', ':-1:')
+    text.gsub!('[thumbup]', ':+1:')
+    text.gsub!('[tongue]', ':tongue:')
+    text.gsub!('[razz]', ':stuck_out_tongue:')
+    text.gsub!('[unsure]', ':thinking:')
+    text.gsub!('[woot]', ':hushed:')
+    text.gsub!('[wink]', ':wink:')
+    text.gsub!('[wub]', ':heartbeat:')
 
     text = bbcode_to_md(text)
 
