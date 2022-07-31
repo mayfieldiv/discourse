@@ -6,6 +6,10 @@ require File.expand_path(File.dirname(__FILE__) + "/base.rb")
 class ImportScripts::YafSqlite < ImportScripts::Base
   BATCH_SIZE = 1000
 
+  CATEGORY_LINK_NORMALIZATION = '/(yaf_topics\d+)_.*/\1'
+  TOPIC_LINK_NORMALIZATION = '/(yaf_postst\d+)_.*/\1'
+  POST_LINK_NORMALIZATION = '/(yaf_postsm\d+)_.*/\1'
+
   def initialize(db_file_path)
     super()
     @db = SQLite3::Database.new(db_file_path, results_as_hash: true)
@@ -14,10 +18,27 @@ class ImportScripts::YafSqlite < ImportScripts::Base
 
   def execute
     puts "", "Importing from SQLite file..."
+    add_permalink_normalizations
     import_categories
     import_users
     import_topics
     import_posts
+    import_likes
+  end
+
+  def add_permalink_normalizations
+    normalizations = SiteSetting.permalink_normalizations
+    normalizations = normalizations.blank? ? [] : normalizations.split('|')
+
+    def add_normalization(normalizations, normalization)
+      normalizations << normalization unless normalizations.include?(normalization)
+    end
+
+    add_normalization(normalizations, CATEGORY_LINK_NORMALIZATION)
+    add_normalization(normalizations, TOPIC_LINK_NORMALIZATION)
+    add_normalization(normalizations, POST_LINK_NORMALIZATION)
+
+    SiteSetting.permalink_normalizations = normalizations.join('|')
   end
 
   def import_categories
@@ -139,10 +160,10 @@ class ImportScripts::YafSqlite < ImportScripts::Base
 
       last_id = rows.last['TopicID']
 
-      # if all_records_exist?(:posts, rows.map { |row| row['MessageID'] })
-      #   skipped += rows.count
-      #   next
-      # end
+      if all_records_exist?(:posts, rows.map { |row| row['MessageID'] })
+        skipped += rows.count
+        next
+      end
 
       c, s = create_posts(rows, total: total_count, offset: offset) do |row|
         {
@@ -204,10 +225,10 @@ class ImportScripts::YafSqlite < ImportScripts::Base
 
       last_id = rows.last['MessageID']
 
-      # if all_records_exist?(:posts, rows.map { |row| row['MessageID'] })
-      #   skipped += rows.count
-      #   next
-      # end
+      if all_records_exist?(:posts, rows.map { |row| row['MessageID'] })
+        skipped += rows.count
+        next
+      end
 
       c, s = create_posts(rows, total: total_count, offset: offset) do |row|
         topic = topic_lookup_from_imported_post_id(row['TopicMessageID'])
@@ -231,6 +252,54 @@ class ImportScripts::YafSqlite < ImportScripts::Base
       end
       created += c
       skipped += s
+    end
+
+    puts ""
+    puts "Created: #{created}"
+    puts "Skipped: #{skipped}"
+    puts ""
+  end
+
+  def import_likes
+    puts "", "creating likes"
+    total_count = @db.get_first_value('SELECT COUNT(*) FROM yaf_Thanks')
+    last_id = '0'
+    created, skipped = 0, 0
+    start_time = get_start_time("likes")
+
+    batches(BATCH_SIZE) do |offset|
+      rows = @db.execute(<<-SQL, last_id)
+        SELECT ThanksID, ThanksFromUserID, MessageID, ThanksDate
+        FROM yaf_Thanks
+        WHERE ThanksID > :last_id
+        ORDER BY ThanksID
+        LIMIT #{BATCH_SIZE}
+      SQL
+
+      break if rows.empty?
+
+      last_id = rows.last['ThanksID']
+      current_count = 0
+
+      rows.each do |row|
+        post = Post.find_by(id: post_id_from_imported_post_id(row['MessageID']))
+        user = User.find_by(id: user_id_from_imported_user_id(row['ThanksFromUserID']))
+
+        if post && user
+          begin
+            PostActionCreator.create(user, post, :like, created_at: row['ThanksDate'])
+            created += 1
+          rescue => e
+            puts "error acting on post #{row['MessageID']}: #{e}"
+          end
+        else
+          puts "Skipping like from user #{row['ThanksFromUserID']} on post #{row['MessageID']}"
+          skipped += 1
+        end
+
+        current_count += 1
+        print_status(offset + current_count, total_count, start_time)
+      end
     end
 
     puts ""
